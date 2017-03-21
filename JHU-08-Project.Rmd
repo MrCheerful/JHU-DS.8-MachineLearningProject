@@ -1,0 +1,163 @@
+---
+title: "JHU Data Science - Machine Learning Project"
+author: "MrCheerful"
+date: "March 20, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Assignment
+
+The assignment is described on the [Coursera Website](
+https://www.coursera.org/learn/practical-machine-learning/supplement/PvInj/course-project-instructions-read-first). So I won't waste your screen space repeating it.
+
+In short, build a prediction model, and evaluate a graded test set.
+
+### Project Environment
+
+The full system reproduceability details are at the very end of this markdown.  The environment setup code chunk is hidden to not waste space.
+
+Packages loaded: ggplot2, caret, dplyr, reshape2, doParallel, randomForest
+
+```{r Environment, include=FALSE}
+library(ggplot2) ; library(caret) ; library(dplyr) ; library(reshape2) ; library(doParallel) ; library(randomForest)
+```
+
+### Project Data
+
+Links to the filesets are provided on the Coursera page provided above.  
+
+Details of the data, in particular, the chart showing where the sensors are placed, may be found at [the webpage for the data](http://groupware.les.inf.puc-rio.br/har) 
+
+```{r retrieve_datasets}
+link1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+file1 <- "pml-training.csv"
+link2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+file2 <- "pml-testing.csv"
+if (!file.exists(file1)){ download.file(link1, destfile = file1, method="curl") }
+if (!file.exists(file2)){ download.file(link2, destfile = file2, method="curl") }
+```      
+
+### Load and Clean Data
+
+Data is loaded with default conversion to factors.  
+
+```{r load_datasets}
+train <- read.csv("pml-training.csv")
+test <- read.csv("pml-testing.csv")
+```
+
+The pml-training file contains a large number of columns that are only used with rows where new_window=yes.  From the data exploration it was determined that these columns are not useful for the predictions required, so they are removed.
+
+* cols.yes - data columns applicable to rows with new_window=yes
+
+* cols.no - data columns applicable to rows with new_window=yes
+
+* cols.e.yes - data columns exclusively used only with new_window=yes
+
+```{r clean_unnecessary_columns}
+cols.yes <- names(train)[-c(1:7,160)]
+cols.no <- names(train)[-c(1:7,12:36,50:59,69:83,87:101,103:112,125:139,141:150,160)]
+cols.e.yes <- cols.yes[!(cols.yes %in% cols.no)]
+trs <- train[,!(names(train) %in% cols.e.yes)]
+```
+
+### Data Partition
+
+The data is split 60:40 into a training and an evaluation set 
+
+```{r data_split}
+set.seed(54321)
+inTrain <- createDataPartition(y=trs$X, p=0.6, list=FALSE)
+trs.train <- trs[inTrain,]
+trs.test <- trs[-inTrain,]
+dim(trs.train) ; dim(trs.test)
+```
+
+
+## Data Exploration Highlights
+
+An in depth examination of the data was conducted to understand how the dataset was made up and the relationships with the exercise activity to be evaluated.  Highlights of the examination are discussed.
+
+#### Motion vs Snapshot
+
+The data presents sequences of measurements as the subject is performing an activity.  In the chart below a movement sequence is plotted for an example motion.  Some of the sensors are near constant for a sequence, and others show the changing movement.  For the purposes of this assignment, the objective is to predict if the activity is being preformed correctly based on a snapshot at one point in time along the sequence. 
+
+```{r, fig.height=2.7}
+sequ <- subset(trs, num_window== 18)
+gs <- ggplot(data=sequ, aes(x=X, y=roll_dumbbell)) + geom_point() +
+      labs(title="Example Response Along Single Sequence", x="Point Index (ie. Time)"); gs
+```
+
+#### Subtle Variations
+
+The differences between a correct movement and an incorrect movement are subtle.  The violin plot shows the range of an example sensor between the correctly executed movement (A) and the four incorrectly executed movements (B through E).  The point plot below illustrates the relationship between two example sensors and the overlapping of the clusters between the different classes of movements.
+
+```{r, fig.height=2.7}
+gv <- ggplot(data=trs.train, aes_string(x="classe", y=paste("trs.train",cols.no[4],sep="$"), fill="classe")) + geom_violin() ; gv
+```
+
+```{r, fig.height=2.7}
+gc <- ggplot(data=trs.train, aes_string(x=paste("trs.train",cols.no[4],sep="$"), y=paste("trs.train",cols.no[35],sep="$"), color="classe")) + geom_point(position="jitter") ; gc
+```
+
+
+## Prediction Model
+
+Several possible models were examined.  The glm model did not work because the GLM algorithm only accepts 2-class outcomes, not a 5 class outcome as is required here.  A decision tree resulted in less than 50% accuracy, which is not sufficient to pass the quiz.
+
+#### Random Forest Model
+
+A random forest (method="rf") model is found to give an in-sample accuracy of 100%, and an out-of-sample accuracy over 99% which is more than sufficient to pass the quiz.
+
+For this model the parameters are set to cross-validate with 5 folds.
+
+```{r train_model}  
+# set up a formula for classe ~ <all predictor columns> and rf parameters
+form.all <- as.formula(paste("classe~", paste(cols.no, collapse= "+") ))
+parms <- trainControl(method="cv", number=5)
+
+# set up for a parallel processing environment and run training operation
+clust <- makeCluster(detectCores())
+registerDoParallel(clust)
+fit.rpart <- train(form=form.all, data=trs.train, method="rf", 
+                   allowParallel = TRUE, trControl = parms)
+stopCluster(clust)
+```
+
+### Output
+
+
+##### Predictions on training group & confusion matrix
+```{r predict_training}
+trs.train.pr <- predict(fit.rpart)
+confusionMatrix(trs.train.pr, trs.train$classe)
+```
+
+
+##### Predictions on test group
+```{r predict_test}
+trs.test.pr <- predict(fit.rpart, newdata = trs.test)
+confusionMatrix(trs.test.pr, trs.test$classe)
+```
+
+
+##### Predictions for quiz submission
+```{r predict_quiz}
+test.rpart.pr <- predict(fit.rpart, newdata=test)
+test.rpart.pr
+```
+
+Looks awesome!
+
+
+### System Reproducibility
+
+System information provided for reproducibility.
+
+```{r reproducibility}
+sessionInfo()
+```
